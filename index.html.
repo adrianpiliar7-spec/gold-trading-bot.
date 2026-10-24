@@ -1,0 +1,211 @@
+
+<!DOCTYPE html>
+<html lang="sk">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#0b111b">
+<title>GOLD TRADER</title>
+<style>
+*{box-sizing:border-box}
+body{margin:0;padding:16px;background:#0b111b;color:#eef3fb;font:16px Arial,sans-serif}
+main{max-width:560px;margin:auto}
+h1{color:#f0c66e;font-size:26px}
+.card{background:#151f2e;border:1px solid #304057;border-radius:14px;padding:16px;margin:14px 0}
+.price{font-size:32px;font-weight:bold;color:#f0c66e}
+.small{font-size:12px;color:#aebbd0;line-height:1.7}
+button{width:100%;padding:14px;margin-top:10px;border:0;border-radius:9px;background:#f0c66e;color:#161616;font-weight:bold;font-size:16px}
+.result{background:#0b111b;padding:14px;border-radius:10px;margin-top:12px;overflow-wrap:anywhere}
+.buy{color:#35d39a}.sell{color:#ff707c}.wait{color:#f0c66e}
+</style>
+</head>
+<body>
+<main>
+<h1>GOLD TRADER</h1>
+<p class="small">XAU/USD · H1 + M15 · Manuálne obchodovanie</p>
+
+<div class="card">
+  <div class="small">REFERENČNÁ CENA ZLATA (USD/oz)</div>
+  <div class="price" id="price">Načítavam...</div>
+  <p class="small" id="priceTime">Čakám na dáta.</p>
+  <p class="small" id="marketNote"></p>
+</div>
+
+<div class="card">
+  <h3>Automatická analýza</h3>
+  <p class="small" id="status">Načítavam údaje...</p>
+  <button onclick="runAnalysis()">OBNOVIŤ ANALÝZU</button>
+  <div id="out" class="result">
+    <strong class="wait">ČAKÁM NA DÁTA</strong>
+  </div>
+</div>
+
+<div class="card">
+  <h3>Pravidlá stratégie</h3>
+  <p class="small">
+    H1: EMA 50 a EMA 200 určujú hlavný smer.<br>
+    M15: sleduje možné prerazenie EMA 50.<br>
+    SL: orientačne za nedávnym minimom alebo maximom.<br>
+    TP: orientačný cieľ s pomerom rizika a zisku 1:2.
+  </p>
+  <p class="small">
+    Toto je testovacia pomôcka, nie záruka zisku.
+    Dáta nemusia zodpovedať tvojmu brokerovi.
+    Aplikácia sama neotvára ani nezatvára obchody.
+  </p>
+</div>
+</main>
+
+<script>
+const API = "https://xaus.com/api/v1";
+
+function ema(values, period) {
+  if (values.length < period) return [];
+  const alpha = 2 / (period + 1);
+  let current = values[0];
+  return values.map((v, i) => {
+    if (i > 0) current = v * alpha + current * (1 - alpha);
+    return current;
+  });
+}
+
+function fmt(n) {
+  return Number(n).toLocaleString("en-US", {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2
+  });
+}
+
+function dateFmt(t) {
+  return new Date(t * 1000).toLocaleString("sk-SK");
+}
+
+async function getJSON(url) {
+  const r = await fetch(url, {cache:"no-store"});
+  if (!r.ok) throw new Error("Zdroj dát vrátil HTTP " + r.status);
+  return await r.json();
+}
+
+function candlesFrom(data) {
+  const arr = data.points || data.candles || data.data;
+  if (!Array.isArray(arr)) {
+    throw new Error("Zdroj neposlal očakávané sviečky.");
+  }
+  return arr.map(x => ({
+    t: Number(x.t),
+    o: Number(x.o),
+    h: Number(x.h),
+    l: Number(x.l),
+    c: Number(x.c)
+  })).filter(x =>
+    Number.isFinite(x.t) &&
+    Number.isFinite(x.o) &&
+    Number.isFinite(x.h) &&
+    Number.isFinite(x.l) &&
+    Number.isFinite(x.c) &&
+    x.h >= x.l
+  ).sort((a,b) => a.t - b.t);
+}
+
+async function runAnalysis() {
+  const out = document.getElementById("out");
+  const status = document.getElementById("status");
+  status.textContent = "Načítavam cenu a sviečky...";
+  out.innerHTML = '<strong class="wait">ANALÝZA PREBIEHA</strong>';
+
+  try {
+    const [spot, h1raw, m15raw] = await Promise.all([
+      getJSON(API + "/spot?compact=1"),
+      getJSON(API + "/chart?symbol=xau&range=3mo&interval=1h"),
+      getJSON(API + "/chart?symbol=xau&range=1mo&interval=15m")
+    ]);
+
+    const price = Number(spot.spot_usd_oz);
+    if (!Number.isFinite(price) || price <= 0) {
+      throw new Error("Referenčná cena nie je dostupná.");
+    }
+
+    document.getElementById("price").textContent = fmt(price);
+    const updated = spot.price_as_of || spot.updated_at;
+    document.getElementById("priceTime").textContent =
+      "Čas ceny: " + (updated || "zdroj čas neuvádza");
+    document.getElementById("marketNote").textContent =
+      "Ide o externú referenčnú cenu, nie cenu tvojho MT5.";
+
+    const h1 = candlesFrom(h1raw);
+    const m15 = candlesFrom(m15raw);
+
+    if (h1.length < 205 || m15.length < 55) {
+      throw new Error("Nie je dosť sviečok na výpočet EMA.");
+    }
+
+    const e50h = ema(h1.map(x => x.c), 50);
+    const e200h = ema(h1.map(x => x.c), 200);
+    const e50m = ema(m15.map(x => x.c), 50);
+
+    const hi = h1.length - 1;
+    const i = m15.length - 1;
+    const prev = i - 1;
+
+    const close = m15[i].c;
+    const prevClose = m15[prev].c;
+    const crossUp = prevClose <= e50m[prev] && close > e50m[i];
+    const crossDown = prevClose >= e50m[prev] && close < e50m[i];
+
+    const recent = m15.slice(Math.max(0, i - 4), i + 1);
+    const low = Math.min(...recent.map(x => x.l));
+    const high = Math.max(...recent.map(x => x.h));
+    const candleTime = dateFmt(m15[i].t);
+
+    status.textContent = "H1 sviečky: " + h1.length +
+      " · M15 sviečky: " + m15.length +
+      " · Posledná M15: " + candleTime;
+
+    let direction = "";
+    if (e50h[hi] > e200h[hi] && crossUp) direction = "BUY";
+    if (e50h[hi] < e200h[hi] && crossDown) direction = "SELL";
+
+    const values =
+      "<p class='small'>H1 EMA 50: " + fmt(e50h[hi]) +
+      "<br>H1 EMA 200: " + fmt(e200h[hi]) +
+      "<br>M15 EMA 50: " + fmt(e50m[i]) +
+      "<br>Posledný Close M15: " + fmt(close) +
+      "<br>Čas poslednej sviečky: " + candleTime + "</p>";
+
+    if (!direction) {
+      out.innerHTML =
+        '<strong class="wait">NO TRADE</strong>' +
+        '<p class="small">Podmienky stratégie sa nezhodujú. To nie je predpoveď budúceho pohybu.</p>' +
+        values;
+      return;
+    }
+
+    const entry = close;
+    const sl = direction === "BUY" ? low : high;
+    const risk = Math.abs(entry - sl);
+    if (!(risk > 0)) throw new Error("Nedá sa vypočítať platný SL.");
+
+    const tp = direction === "BUY" ? entry + 2 * risk : entry - 2 * risk;
+
+    out.innerHTML =
+      '<strong class="' + (direction === "BUY" ? "buy" : "sell") +
+      '">MOŽNÝ ' + direction + '</strong>' +
+      '<p class="small">Referenčný vstup: ' + fmt(entry) +
+      '<br>Orientačný SL: ' + fmt(sl) +
+      '<br>Orientačný TP (1:2): ' + fmt(tp) + '</p>' +
+      values +
+      '<p class="small">Pred akýmkoľvek obchodom over graf a cenu u brokera. Signál nie je zárukou výsledku.</p>';
+
+  } catch (err) {
+    status.textContent = "Analýza sa nepodarila.";
+    out.innerHTML =
+      '<strong class="wait">DÁTA NIE SÚ DOSTUPNÉ</strong>' +
+      '<p class="small">' + String(err.message || err) + '</p>' +
+      '<p class="small">Skús neskôr. Neobchoduj podľa neoverených dát.</p>';
+  }
+}
+
+runAnalysis();
+</script>
+</body>
+</html>
