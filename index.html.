@@ -5,7 +5,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="theme-color" content="#0b111b">
-<title>gold-trading-bot</title>
+<title>gold-trading-bot.</title>
 <style>
 *{box-sizing:border-box}
 body{margin:0;padding:16px;background:#0b111b;color:#eef3fb;font:16px Arial,sans-serif}
